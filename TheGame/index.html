@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>لعبة الطيران - نقاط</title>
+<style>
+  :root{ --bg1:#b3ecff; --bg2:#c4f0ff; --ground:#6fbf44; --pipe:#2c9c3a; --badge:#ffffffaa; --badgeText:#03314b }
+  html,body{ height:100%; margin:0; }
+  body{ display:flex; align-items:center; justify-content:center; background:linear-gradient(180deg,var(--bg1),var(--bg2)); font-family:system-ui; -webkit-font-smoothing:antialiased; }
+  #wrap{ position:relative; width:420px; max-width:95vw; }
+  canvas{ display:block; width:100%; height:auto; border-radius:10px; touch-action:none; background:transparent; }
+  /* شارت النتيجة (بدون كلام زائد) */
+  .scoreBadge{
+    position:absolute;
+    left:50%; transform:translateX(-50%);
+    top:10px;
+    background:var(--badge);
+    padding:8px 14px;
+    border-radius:22px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    box-shadow:0 6px 18px rgba(0,0,0,0.12);
+    user-select:none;
+    pointer-events:none;
+  }
+  .scoreNum{ font-weight:800; font-size:28px; color:var(--badgeText); line-height:1; }
+  .bestNum{ font-size:12px; color:var(--badgeText); opacity:0.9; margin-top:3px; }
+  @media (max-width:420px){
+    .scoreNum{ font-size:22px }
+  }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="c" width="400" height="600" aria-label="لوحة اللعبة"></canvas>
+    <div class="scoreBadge" aria-hidden="true">
+      <div class="scoreNum" id="scoreDisplay">0</div>
+      <div class="bestNum" id="bestDisplay">أفضل: 0</div>
+    </div>
+  </div>
+
+<script>
+/* ====== إعدادات اللعبة ====== */
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+const scoreDisplay = document.getElementById('scoreDisplay');
+const bestDisplay = document.getElementById('bestDisplay');
+
+const imgPlay = new Image(); imgPlay.src = './img/play.png';
+const imgCry  = new Image(); imgCry.src = './img/cry.png';
+
+let devicePixelRatioFix = (() => {
+  // ضبط للـ canvas على شاشات عالية الدقة
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.width = canvas.getAttribute('width') + 'px';
+  canvas.style.height = canvas.getAttribute('height') + 'px';
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+  return dpr;
+})();
+
+/* فيزياء وإعدادات */
+let gravity = 0.45;
+let flapStrength = -8.6;
+let pipeSpeed = 2.6;
+let pipeGap = 180;
+let pipeWidth = 72;
+let spawnInterval = 110; // frames
+let frame = 0;
+
+/* حالة اللاعب واللعبة */
+const player = { x: 100, y: H/2, w: 52, h: 52, vy: 0 };
+let pipes = []; // {x, top, passed}
+let running = false;
+let isGameOver = false;
+
+/* نقاط */
+let score = 0;
+let best = Number(localStorage.getItem('flappy_best_v2') || 0);
+bestDisplay.textContent = 'أفضل: ' + best;
+
+/* إعادة الضبط */
+function reset(){
+  pipes = [];
+  player.y = H/2;
+  player.vy = 0;
+  frame = 0;
+  running = false;
+  isGameOver = false;
+  score = 0;
+  updateScoreUI();
+}
+reset();
+
+/* وظيفة للـ flap (لمس/كليك/مسافة) */
+function flapNow(){
+  if(isGameOver){
+    // إعادة بعد الخسارة
+    reset();
+    return;
+  }
+  if(!running){
+    running = true;
+  }
+  player.vy = flapStrength;
+}
+
+/* إدخالات */
+window.addEventListener('keydown', e=>{
+  if(e.code === 'Space' || e.code === 'ArrowUp'){ e.preventDefault(); flapNow(); }
+});
+canvas.addEventListener('mousedown', (e)=>{ e.preventDefault(); flapNow(); });
+canvas.addEventListener('touchstart', (e)=>{ e.preventDefault(); flapNow(); }, {passive:false});
+
+/* توليد أنبوب */
+function spawnPipe(){
+  const margin = 60;
+  const maxTop = H - pipeGap - margin;
+  const top = Math.floor(Math.random() * (maxTop - margin)) + margin;
+  pipes.push({ x: W + 20, top: top, passed: false });
+}
+
+/* تحديث النقاط في الواجهة */
+function updateScoreUI(){
+  scoreDisplay.textContent = score;
+  bestDisplay.textContent = 'أفضل: ' + best;
+}
+
+/* تحديث فيزيائي */
+function update(){
+  frame++;
+  if(running && !isGameOver){
+    // توليد أنابيب بشكل دوري
+    if(frame % spawnInterval === 0) spawnPipe();
+
+    // تحديث اللاعب
+    player.vy += gravity;
+    player.y += player.vy;
+
+    // تحريك الأنابيب وفحص التمرير للنقاط
+    for(let i = pipes.length - 1; i >= 0; i--){
+      const p = pipes[i];
+      p.x -= pipeSpeed;
+
+      // تسجيل النقطة عند المرور مرة واحدة فقط
+      if(!p.passed && (p.x + pipeWidth) < player.x - 6){
+        p.passed = true;
+        score += 1;
+        // حفظ أفضل نتيجة لو تعدّاها
+        if(score > best){
+          best = score;
+          localStorage.setItem('flappy_best_v2', best);
+        }
+        updateScoreUI();
+      }
+
+      // إزالة أنابيب خارج الشاشة
+      if(p.x + pipeWidth < -50) pipes.splice(i, 1);
+    }
+
+    // تصادم مع الأرض أو السقف
+    if(player.y + player.h/2 >= H - 20){
+      player.y = H - 20 - player.h/2;
+      endGame();
+    }
+    if(player.y - player.h/2 <= 0){
+      player.y = player.h/2;
+      player.vy = 0;
+    }
+
+    // تصادم مع الأنابيب
+    for(const p of pipes){
+      const inX = player.x + player.w/2 > p.x && player.x - player.w/2 < p.x + pipeWidth;
+      if(inX){
+        const aboveGap = player.y - player.h/2 < p.top;
+        const belowGap = player.y + player.h/2 > p.top + pipeGap;
+        if(aboveGap || belowGap){
+          endGame();
+          break;
+        }
+      }
+    }
+  }
+}
+
+/* إنهاء اللعبة */
+function endGame(){
+  isGameOver = true;
+  running = false;
+  // لو انتهى وكانت النتيجة هي الأفضل، اتحفظت من قبل في update
+  updateScoreUI();
+}
+
+/* رسم عناصر اللعبة */
+function draw(){
+  // الخلفية
+  ctx.clearRect(0,0,W,H);
+  const grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0, '#a6e0ff');
+  grad.addColorStop(1, '#dff9ff');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,W,H);
+
+  // أنابيب
+  for(const p of pipes){
+    ctx.fillStyle = '#2c9c3a';
+    ctx.fillRect(p.x, 0, pipeWidth, p.top);
+    ctx.fillRect(p.x, p.top + pipeGap, pipeWidth, H - (p.top + pipeGap) - 20);
+  }
+
+  // أرض بسيطة
+  ctx.fillStyle = '#6fbf44';
+  ctx.fillRect(0, H - 20, W, 20);
+
+  // اللاعب: نرسم صورة اللعب أو البكاء
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  const img = isGameOver ? imgCry : imgPlay;
+  // لو الصورة لسا متمّاش تحميلها خلاص ترسم شكل افتراضي
+  if(img && img.complete && img.naturalWidth !== 0){
+    ctx.beginPath();
+    const r = Math.min(player.w, player.h) / 2;
+    ctx.arc(0, 0, r, 0, Math.PI*2);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(img, -player.w/2, -player.h/2, player.w, player.h);
+  }else{
+    ctx.fillStyle = '#ffcc00';
+    roundRect(ctx, -player.w/2, -player.h/2, player.w, player.h, 10, true, false);
+  }
+  ctx.restore();
+}
+
+/* مستطيل بزوايا مدورة */
+function roundRect(ctx,x,y,w,h,r,fill,stroke){
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+  if(fill) ctx.fill();
+  if(stroke) ctx.stroke();
+}
+
+/* لوب اللعبة */
+function loop(){
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* احفظ UI مبدئياً */
+updateScoreUI();
+
+/* --- ملاحظات --- */
+/* - لتغيير صعوبة اللعب: غيّر pipeSpeed, pipeGap, spawnInterval. */
+/* - الصور: ضع play.png و cry.png في نفس المجلد مع index.html. */
+/* - اللمس يعمل: الأول لمس يبدأ اللعب، أثناء اللعب لمس = flap. بعد الخسارة المس = إعادة تشغيل. */
+
+</script>
+</body>
+</html>
